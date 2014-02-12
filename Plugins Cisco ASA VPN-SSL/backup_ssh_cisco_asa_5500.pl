@@ -113,7 +113,7 @@ $ssh2->send("enable");
 $ssh2->waitfor( 'Password:\s*\z', 2 ) or die "prompt 'password' not found after 2 seconds";
 ## Envoie du mot de passe pour se connecté
 $ssh2->send($pass);
-$ssh2->waitfor( 'extranet#\s*\z', 2 ) or die "prompt 'password' not found after 2 seconds";
+$ssh2->waitfor( '#\s*\z', 2 ) or die "prompt 'login' not found after 2 seconds";
 
 ## Concacténation des arguements pour la sauvegarde de l'appliance
 $command1 = $command1.$opt_iptftp."/".$opt_sauvegarde;
