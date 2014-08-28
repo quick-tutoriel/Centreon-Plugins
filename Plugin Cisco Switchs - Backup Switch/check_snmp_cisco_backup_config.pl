@@ -1,16 +1,17 @@
 #!/usr/bin/perl -w
-## Definition des variables et des fonctions à  utiliser.
+## Definition des variables et des fonctions à utiliser.
 use strict;
 use Getopt::Long;
 use vars qw($opt_h $opt_community $opt_iprouteur $opt_iptftp $opt_sauvegarde $config $chemin_sauvegarde $output );
 use lib "/usr/local/nagios/libexec";
 use utils qw($TIMEOUT %ERRORS &print_revision &support);
-## Fonction à  rajouter depuis le CPAN, pour effectuer une sauvegarde du routeur avec PERL
-use Net::OpenSSH;
+## Fonction a� rajouter depuis le CPAN, pour effectuer une sauvegarde du routeur avec PERL
+use Net::Telnet;
 use Net::SNMP;
+use File::stat;
 use Cisco::CopyConfig;
 
-## Définition des variables à  saisir pour chaque routeur concerné
+## Definition des variables a� saisir pour chaque routeur concerne
 Getopt::Long::Configure('bundling');
 GetOptions
 ("h"	=>	\$opt_h,		"help"		=> \$opt_h,
@@ -47,23 +48,26 @@ elsif (!defined($opt_sauvegarde)){
    exit ($ERRORS{'UNKNOWN'});
 }
 
-
-## Avec la fonction Cisco::CopyConfig, il est impossible d 'Ã©craser le dernier fichier de sauvegarde
-## vous devez donc avant d'effectuer une sauvegarde le supprimer. Si le fichier ne se trouve pas sur le même serveur
+## Avec la fonction Cisco::CopyConfig, il est impossible d 'ecraser le dernier fichier de sauvegarde
+## vous devez donc avant d'effectuer une sauvegarde le supprimer. Si le fichier ne se trouve pas sur le meme serveur
 ## vous devrez utiliser par exemple le module CPAN Net::OpenSSH pour se connecter en ssh dessus et effectuer vos modifications.
-## Initialisation des variables pour se connecter au serveur TFTP
-my $username = "administrateur";
-my $password = "vrpbjr";
+## Initialisation des variables pour se conencter au serveur TFTP
+my $username = "";
+my $password = "";
 
 ## Initialisation des variables diverses
+my @line;
 my $output = "";
 my $status = 'OK';
 my $chemin_sauvegarde = "";
-my $taille = "";
 my $date_format = "";
 my $snmp_timeout_in_seconds = 30;
+my $chemin_tftp = "/tftpboot/";
+my $prompt = '/.*[\$#:>\]\%] *$/';
+my $pause = 5;
+my $perfdata = "";
 
-## Declaration des variables pour récupérer et manipuler la date et l'heure
+## Declaration des variables pour recuperer et manipuler la date et l'heure
 my ( $sec, $min, $hour, $mday, $mon, $year, $wday, $yday, $isdst)=localtime(time);
 $year+=1900;
 $mon  = sprintf("%02d",$mon+1);
@@ -73,58 +77,59 @@ $min  = sprintf("%02d",$min);
 $sec  = sprintf("%02d",$sec);
 $date_format="$mday-$mon-$year $hour:$min:$sec";
 
-
-## Le paramètre strict_mode => 0 permet de s'affranchir du message de sécurité suivant ../.libnet-openssh-perl/ is not secure
-## si on exÃ©cute le script en mode non root.
-## Permet de supprimer le fichier de configuration existant si il existe sur le serveur TFTP
-## avant la nouvelle sauvegarde. la connexion s'effectue en SSH.
-my $ssh2 = Net::OpenSSH->new($opt_iptftp, user => $username, password => $password, strict_mode => 0);
-if ($ssh2->error) {
-      $status = 'CRITICAL';
-      $output = $output . " Backup Config Error :" . $ssh2->error; 
-      printf "$status %s \n", $output;
-      exit $ERRORS{$status}; 
-    }
-    else {
-    $ssh2->system("cd /tftpboot/; rm -f $opt_sauvegarde ");
-    }
+## Connexion Telnet au serveur TFTP pour supprimer l'ancienne sauvegarde. Il est necessaire de supprimer avant le dernier fichier
+## de sauvegarde sinon le backup echoue.
+my $telnet2 = new Net::Telnet (Timeout => 20, Prompt => $prompt, Errmode=>'return');
+ 
+if ($telnet2->open($opt_iptftp))
+{
+$telnet2 -> login ($username, $password);
+$telnet2 -> cmd ("cd $chemin_tftp");
+$telnet2 -> cmd ("rm -f $opt_sauvegarde");
+}
+else
+{
+$status = 'CRITICAL';
+$output = $output . " Connexion Error :" . $telnet2->error; 
+printf "$status %s \n", $output;
+exit $ERRORS{$status}; 
+}
     
-
 ## Connexion au routeur/switch pour effectuer la sauvegarde
 $config = Cisco::CopyConfig->new(
                      Host => $opt_iprouteur,
                      Comm => $opt_community,
                      Tmout => $snmp_timeout_in_seconds
-    );
+);
     
-
-
 ## Backup de la configuration du routeur/switch vers le serveur TFTP
 if ($config->copy($opt_iptftp, $opt_sauvegarde)) {
-      $chemin_sauvegarde="/tftpboot/" .$opt_sauvegarde;
-      ## Commande permettant de vérifier que le fichier existe bien sur le serveur TFTP et/ou a bien été copié
-      ## On rÃ©cupÃ¨re la sortie de la commande echo $? 0: success 1:fail
-       my $existfichier = $ssh2->capture("test -f $chemin_sauvegarde ; echo $?");
-          if  ($existfichier != 1) {
-            ## Commande permettant de récupérer la taille d'un fichier via la commande stat sur un hôte distant
-            ## en utilisant le module CPAN Net::OpenSSH.
-            my $taille = $ssh2->capture("cd /tftpboot/; stat -c%s $chemin_sauvegarde");
-            $taille = $taille /1000;
-            $status = 'OK';
-            $output = $output . " Last Backup Config : " . $date_format ." - Fichier : " . $opt_sauvegarde ." - Taille : " . $taille . " Ko";
-          }
-           else {
-            $status = 'CRITICAL';
-            $output = "Erreur de copie du fichier de backup ou fichier inacessible.";
-          }
+      $chemin_sauvegarde= $chemin_tftp .$opt_sauvegarde;
+      $telnet2 -> cmd ("cd $chemin_tftp");
+       ## Permet de modifier les droits du fichier de sauvegarde
+       $telnet2 -> cmd ("chmod og+r+w $opt_sauvegarde");
+       ## Commande permettant de recuperer la taille d'un fichier
+       @line = $telnet2 -> cmd ("stat -c%s $chemin_sauvegarde");
+       my $taille = $line[0]/1000;
+       ## Test verifiant la taille du fichier sauvegard�
+       if ($taille > 0) 
+       {
+          $status = 'OK';
+          $perfdata = $taille;
+          $output = " Last Backup Config : " . $date_format .  " - Fichier : " . $opt_sauvegarde . " - Taille : " . $taille . " Ko";
+       }
+       else
+       {
+         $status = 'CRITICAL';
+         $perfdata = $taille;
+         $output = " Backup Config Error (Taille fichier null) : " . $date_format .  " - Fichier : " . $opt_sauvegarde . " - Taille : " . $taille . " Ko";
+       }
 }
  else {
   $status = 'CRITICAL';
   $output = $output . " Backup Config Error : " . $config->{err};
 }
 
-
-## Affichage du résultat dans Centreon
-printf "$status %s \n", $output;
+## Affichage du resultat dans Centreon
+printf "$status %s | TAILLE_BACKUP=%d \n", $output, $perfdata;
 exit $ERRORS{$status};
-
