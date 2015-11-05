@@ -1,0 +1,164 @@
+#!/usr/bin/perl 
+## Definition des variables et des fonctions à utiliser. 
+## Fonction à  rajouter depuis le CPAN, pour effectuer une sauvegarde du commutateur avec PERL
+##
+use strict;
+use Getopt::Long;
+use Net::SSH::Expect;
+use Net::SNMP;
+use vars qw($opt_h $opt_host $opt_community $opt_version $opt_command $opt_w $opt_c $opt_user $opt_password);
+use lib "/usr/lib/nagios/plugins";
+use utils qw($TIMEOUT %ERRORS &print_revision &support);
+
+## Initialisation des variables
+my $output = "";
+my $status = "OK";
+my $perfdata;
+my $prompt = '/.*[\$#:>\]\%] *$/';
+my $line;
+my @tab;
+##Variable contenant le debut des lignes a analyser dans la commande
+my $core0 = "Core 0";
+my $core1 = "Core 1";
+##Variable qui va contenir le % de CPU utilisé sur le VSS Cisco
+my $cpu_core0;
+my $cpu_core1;
+
+##Plugin var init
+Getopt::Long::Configure('bundling');
+GetOptions
+("h"	=>	\$opt_h,	"help"		=> \$opt_h,
+ "H=s"  =>	\$opt_host,	"host=s"	=> \$opt_host,
+ "Y=s"  =>	\$opt_community,"community=s"	=> \$opt_community,
+ "V=s"  =>	\$opt_version, "version=s"	=> \$opt_version,
+ "K=s"	=>	\$opt_command,	"command=s"	=> \$opt_command,
+ "W=s"	=>	\$opt_w,	"warning=s"	=> \$opt_w,
+ "C=s"	=>	\$opt_c,	"critical=s"	=> \$opt_c,
+ "u=s"  =>      \$opt_user,  	"user=s"  	=> \$opt_user,
+ "p=s"  =>      \$opt_password, "password=s"  	=> \$opt_password
+);
+
+## Affiche l'aide pour executer le plugin avec le paramètre -h
+## et verifie si tous les arguments obligatoires sont saisis
+if ($opt_h){
+  print "Usage du plugin :\n";
+  print "-h (--help) 		Affiche l'aide\n";
+  print "-H (--host)		Adresse IP\n";
+  print "-Y (--community)	Communaute\n";
+  print "-V (--version)        	Version SNMP\n";
+  print "-K (--command)      	Commande a executer sur le switch\n";
+  print "-W (--warning) 	    Valeur Warning CPU\n";
+  print "-C (--critical)	    Valeur Critical CPU\n";
+  print "-u (--user)        	User SSH\n";
+  print "-p (--password)       	Password SSH\n";
+  exit ($ERRORS{'UNKNOWN'});
+}
+
+if (!defined($opt_host)){
+   print "Vous devez saisir l'adresse IP de l'appliance Ucopia\n";
+   exit ($ERRORS{'UNKNOWN'});
+}
+if (!defined($opt_community)){
+   print "Veuillez saisir la communaute de votre equipement\n";
+   exit ($ERRORS{'UNKNOWN'});
+}
+if (!defined($opt_version)){
+   print "Veuillez saisir la version SNMP de votre equipement\n";
+   exit ($ERRORS{'UNKNOWN'});
+}
+if (!defined($opt_command)){
+   print "Veuillez saisir la commande a executer sur le switch\n";
+   exit ($ERRORS{'UNKNOWN'});
+}
+if (!defined($opt_w)){
+   print "Vous devez saisir une valeur de Warning pour le CPU\n";
+   exit ($ERRORS{'UNKNOWN'});
+}
+if (!defined($opt_c)){
+   print "Vous devez saisir une valeur de Critical pour le CPU\n";
+   exit ($ERRORS{'UNKNOWN'});
+}
+if (!defined($opt_user)){
+   $opt_user="";
+}
+if (!defined($opt_password)){
+   $opt_password="";
+}
+
+##Affection des valeurs saisies par l'utilisateur dans des variables courantes
+my $command=$opt_command;
+my $host=$opt_host;
+my $user=$opt_user;
+my $password=$opt_password;
+
+##Parametre pour la conenxion au switch en SSH via le Expect (module CPAN)
+my $ssh = Net::SSH::Expect->new(
+  host     => $host,
+  user     => $user,
+  password => $password,
+  timeout  => 15,
+  raw_pty  => 1
+);
+
+##Connexion sur le switch en SSH
+my $login_output = $ssh->login();
+
+##Execution de la commande sur le switch
+$ssh->send($command);   
+
+##Recupere chaque ligne de retour de la commande execute
+while ( defined ($line= $ssh->read_line()) ) {
+    
+    ##On met dans un tableau chaque ligne de resultat avec comme separateur sur la ligne un : 
+    @tab=split(":",$line);
+     
+    ##Si la ligne de retour contient le contenu de la varianle core0 alors on recupere la % CPU utilise
+    if ( $line =~m/$core0/ ) {
+      $cpu_core0 = $tab[3];
+      $cpu_core0 =~s/[a-z]| |;|%//gi;
+    }
+
+    ##Si la ligne de retour contient le contenu de la varianle core1 alors on recupere la % CPU utilise
+    if ( $line =~m/$core1/ ) {
+      $cpu_core1 = $tab[3];
+      $cpu_core1 =~s/[a-z]| |;|%//gi;
+    }   
+}
+
+## Ferme la connexion SSH sur l'equipement
+$ssh->close();
+
+## Verifie si la variable $stdout contient une valeur, si non sort du programme avec le Statut CRITIQUE
+if (not($cpu_core0) || not($cpu_core1)){
+   $status = "CRITICAL";
+   $output ="Impossible de recuperer la CPU du switch.";
+   print "$status $output\n";
+   exit $ERRORS{$status}; 
+}
+
+## Test de la valeur des CPU pour afficher une alerte ou pas
+if ($cpu_core0 >= $opt_c || $cpu_core1 >= $opt_c  )
+{
+       ## L'affichage dans Centreon est base sur 3 variables :
+       ## $status: indique le statut du service, $perfdata: contient les valeurs pour le graphique, $output: contient le texte a afficher dans Centreon
+       $status = "CRITICAL";
+       $perfdata = "CPU_CORE_0=$cpu_core0, CPU_CORE_1=$cpu_core1, TOTALCPU=100";
+       $output ="CPU Used Core0 : $cpu_core0 - Core1 : $cpu_core1 (Seuils W:$opt_w C:$opt_c)";
+
+}
+ elsif (($cpu_core0 >= $opt_w && $cpu_core0 < $opt_c) || ($cpu_core1 >= $opt_w && $cpu_core1 < $opt_c))
+{
+       $status = "WARNING";
+       $perfdata = "CPU_CORE_0=$cpu_core0, CPU_CORE_1=$cpu_core1, TOTALCPU=100";
+       $output ="CPU Used Core0 : $cpu_core0 - Core1 : $cpu_core1 (Seuils W:$opt_w C:$opt_c)";
+}
+else
+{
+      $status = "OK";
+      $perfdata = "CPU_CORE_0=$cpu_core0, CPU_CORE_1=$cpu_core1, TOTALCPU=100";
+      $output ="CPU Used Core0 : $cpu_core0 % - Core1 : $cpu_core1 % (Seuils W:$opt_w C:$opt_c)";
+}
+
+## Affichage des informations dans Centreon
+printf "$status %s|%s \n", $output, $perfdata;
+exit $ERRORS{$status}; 
