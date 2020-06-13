@@ -1,6 +1,5 @@
 #!/usr/bin/perl 
-## Definition des variables et des fonctions à utiliser. 
-## Fonction à  rajouter depuis le CPAN, pour effectuer une sauvegarde du commutateur avec PERL
+## Definition les variables et les fonctions a utiliser. 
 ##
 use strict;
 use Getopt::Long;
@@ -34,6 +33,7 @@ GetOptions
  "H=s"  =>	\$opt_host,	"host=s"	=> \$opt_host,
  "k=s"	=>	\$opt_command,	"command=s"	=> \$opt_command,
  "w=s"	=>	\$opt_w,	"warning=s"	=> \$opt_w,
+
  "c=s"	=>	\$opt_c,	"critical=s"	=> \$opt_c,
  "u=s"  =>      \$opt_user,  	"user=s"  	=> \$opt_user,
  "p=s"  =>      \$opt_password, "password=s"  	=> \$opt_password
@@ -49,6 +49,7 @@ if ($opt_h){
   print "-H (--host)		Adresse IP du switch\n";
   print "-k (--command)        	Commande a executer sur le switch\n";
   print "-w (--warning) 	        Valeur Warning\n";
+
   print "-c (--critical)	        Valeur Critical\n";
   print "-u (--user)        	User SSH\n";
   print "-p (--password)       	Password SSH\n";
@@ -64,18 +65,23 @@ if (!defined($opt_command)){
    exit ($ERRORS{'UNKNOWN'});
 }
 if (!defined($opt_w)){
+
    print "Vous devez saisir une valeur pour WARNING\n";   
    exit ($ERRORS{'UNKNOWN'});
+
 }
+
 if (!defined($opt_c)){
+
    print "Vous devez saisir une valeur pour CRITICAL\n";
+
    exit ($ERRORS{'UNKNOWN'});
 }
 if (!defined($opt_user)){
-   $opt_user="admin";
+   $opt_user="";
 }
 if (!defined($opt_password)){
-   $opt_password="Chu87Dtsi";
+   $opt_password="";
 }
 
 ## Affectation des options saisies dans des variables
@@ -141,10 +147,14 @@ $poucentage_util = sprintf("%.0f", $poucentage_util);
 ## Test des conditions pour attribuer le status CRITICAL ou WARNING ou service
 ##
 if ( $result >= $opt_c ) {
+
        $status = 'CRITICAL';
       }
+
 	elsif ($result >= $opt_w && $result < $opt_c){
+
            $status = 'WARNING';
+
       }
 
 ## Construction de l'affichage pour Centreon
@@ -152,5 +162,7 @@ $perfdata = "CONSUMEDPOWER=$consomation_poe, AVAILABLEPOWER=$puissance_totale";
 $output = "Devices Connected POE : $appareil_poe - Available Power (Watts) : $puissance_totale - Consumed Power (Watts) : $consomation_poe ($poucentage_util% used) (Seuils W:$opt_w C:$opt_c)";
 
 #Affichage des résultats dans Centreon
+
 printf "$status %s|%s \n", $output, $perfdata;
+
 exit $ERRORS{$status};
