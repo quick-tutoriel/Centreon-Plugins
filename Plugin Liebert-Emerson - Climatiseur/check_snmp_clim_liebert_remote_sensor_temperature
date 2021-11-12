@@ -1,0 +1,140 @@
+#!/usr/bin/perl -w
+use strict;
+use Getopt::Long;
+use vars qw($opt_h $opt_community $opt_version $opt_host $opt_w $opt_c);
+use lib "/usr/lib/nagios/plugins";
+use utils qw($TIMEOUT %ERRORS &print_revision &support);
+use Net::SNMP;
+
+
+#Déclaration des variables
+my $NbElem =0; 
+my $perfdata = "";
+my $status = 'OK';
+my $output = "";
+my $oid;
+my $libelle = "";
+my $nb_critical = 0;
+my $nb_warning = 0;
+
+##
+## Déclaration d'une table de Hashage
+##
+##
+## Dans cette table il faut indiquer tous les remote sensor
+## connectes à l'appliance.
+## La table contient OID puis le libelle associe
+##
+my %services = (".1.3.6.1.4.1.476.1.42.3.4.9.10.1.6.1" => "Sonde1-Baie19",
+	     ".1.3.6.1.4.1.476.1.42.3.4.9.10.1.6.2" => "Sonde2-Baie16",
+	     ".1.3.6.1.4.1.476.1.42.3.4.9.10.1.6.3" => "Sonde3-Baie14",
+ 	     ".1.3.6.1.4.1.476.1.42.3.4.9.10.1.6.4" => "Sonde4-Baie11-Avant",
+             ".1.3.6.1.4.1.476.1.42.3.4.9.10.1.6.5" => "Sonde5-Baie11-Arriere",
+	     ".1.3.6.1.4.1.476.1.42.3.4.9.10.1.6.6" => "Sonde6-Baie9",
+ 	     ".1.3.6.1.4.1.476.1.42.3.4.9.10.1.6.7" => "Sonde7-Baie8");
+
+Getopt::Long::Configure('bundling');
+GetOptions
+("h"	=>	\$opt_h,		"help"		=> \$opt_h,
+ "C=s"	=>	\$opt_community,	"community=s"	=> \$opt_community,
+ "V=s"  =>	\$opt_version,		"version=s"	=> \$opt_version, 
+ "H=s"	=>	\$opt_host,		"host=s"	=> \$opt_host,
+ "w=s"	=>	\$opt_w,		"warning=s"	=> \$opt_w,
+ "c=s"	=>	\$opt_c,		"critical=s"	=> \$opt_c);
+
+if ($opt_h){
+  print "Usage du plugin :\n";
+  print "-h (--help) 		Affiche l'aide\n";
+  print "-C (--community)	Valeur de la communaute\n";
+  print "-V (--version)		SNMP Version (1-2C-3)\n";
+  print "-H (--hostname)	Adresse IP de l'host\n";
+  print "-w (--warning) 	Valeur Warning\n";
+  print "-c (--critical)	Valeur Critical\n";
+  exit ($ERRORS{'UNKNOWN'});
+}
+
+if (!defined($opt_community)){
+   print "Vous devez saisir une communaute\n";
+   exit ($ERRORS{'UNKNOWN'});
+}
+elsif (!defined($opt_version)){
+   print "Vous devez saisir la version de SNMP\n";
+   exit ($ERRORS{'UNKNOWN'});
+}
+elsif (!defined($opt_host)){
+   print "Vous devez saisir une adresse ip pour le host\n";
+   exit ($ERRORS{'UNKNOWN'});
+}
+elsif (!defined($opt_w)){
+   print "Vous devez saisir une valeur pour WARNING\n";
+   exit ($ERRORS{'UNKNOWN'});
+}
+elsif (!defined($opt_c)){
+   print "Vous devez saisir une valeur pour CRITICAL\n";
+   exit ($ERRORS{'UNKNOWN'});
+}
+
+my ($session, $error) = Net::SNMP ->session(-community => $opt_community,
+					    -version => $opt_version,
+					    -hostname => $opt_host,
+					    );
+if (!defined($session)){
+  print ("UNKNOWN: $error\n");
+  exit ($ERRORS{'UNKNOWN'});
+}
+
+#On récupère le prefixe de l'OID commun à toutes les sondes
+my $snmp_oid= ".1.3.6.1.4.1.476.1.42.3.4.9.10.1.6";
+
+#On stocke le résultat dans un tableau
+my $resultOID = $session->get_table( -baseoid => $snmp_oid);
+if (!defined($resultOID)) {
+   printf ("UNKNOWN: %s. \n", $session->error);
+   $session->close;
+   exit ($ERRORS{'UNKNOWN'});
+} 
+
+# Fonction permettant de récupérer le nombre d'élément d'une table de Hash
+$NbElem = keys (%services);
+
+#Parcours du tableau qui contient toutes les sondes sur la climatisation
+foreach my $key ( sort(keys %$resultOID)) {
+  #Permet de tester les sondes qui sont uniquement dans la table de Hash
+  while (($oid, $libelle) = each(%services))
+  {
+     #Construction de l'affichage de l'etat des sondes.
+     if ($key eq $oid) {	
+        if ( $$resultOID{$key} >= $opt_c ) {
+             $nb_critical = $nb_critical +1
+           
+        }
+	  elsif ($$resultOID{$key} >= $opt_w && $$resultOID{$key} < $opt_c){
+             $nb_warning = $nb_warning +1
+          }
+        $output = $output . " $libelle:$$resultOID{$key} -";
+        $perfdata = $perfdata . "$libelle=$$resultOID{$key}, ";          
+     }
+  }
+}
+
+
+#Ajout des seuils de temperature dans le resultat
+$output = $output . " (Seuils W:$opt_w C:$opt_c)";
+#Ajout de la temperature MAXI en suil dans les graphiques. 
+$perfdata = $perfdata . "TEMP-MAXI-REMOTE-SONDE=$opt_c";  
+
+#Determination du statut du service
+if ($nb_warning == 0 && $nb_critical == 0){
+ $status = 'OK';
+}
+elsif ($nb_critical > $nb_warning) {
+  $status = 'CRITICAL';
+}
+else {
+  $status = 'WARNING';
+}
+
+
+#Affichage du résultat avec le statut du service dans Centreon
+printf "$status %s | %s \n", $output, $perfdata;
+exit $ERRORS{$status};

@@ -1,0 +1,111 @@
+#!/usr/bin/perl -w
+
+##
+## Plugin init
+##
+use strict;
+use Getopt::Long;
+use vars qw($opt_h $opt_community $opt_version $opt_host $opt_warning $opt_critical);
+use lib "/usr/lib/nagios/plugins";
+use utils qw($TIMEOUT %ERRORS &print_revision &support);
+use Net::SNMP;
+
+##
+## Plugin var init
+##
+Getopt::Long::Configure('bundling');
+GetOptions
+("h"	=>	\$opt_h,		"help"		=> \$opt_h,
+ "C=s"	=>	\$opt_community,	"community=s"	=> \$opt_community,
+ "V=s"  =>	\$opt_version,		"version=s"	=> \$opt_version, 
+ "H=s"	=>	\$opt_host,		"host=s"	=> \$opt_host,
+ "w=s"	=>	\$opt_warning,	        "warning=s"	=> \$opt_warning,
+ "c=s"	=>	\$opt_critical,	        "critical=s"	=> \$opt_critical);
+
+if ($opt_h){
+  print "Usage du plugin :\n";
+  print "-h (--help) 		Affiche l'aide\n";
+  print "-C (--community)	Valeur de la communaute\n";
+  print "-V (--version)		SNMP Version (1-2C-3)\n";
+  print "-H (--hostname)	        Adresse IP de l'host\n";
+  print "-w (--warning)          Valeur Warning\n";
+  print "-c (--critical)         Valeur Critical\n";
+  exit ($ERRORS{'UNKNOWN'});
+}
+
+if (!defined($opt_community)){
+   print "Vous devez saisir une communaute\n";
+   exit ($ERRORS{'UNKNOWN'});
+}
+elsif (!defined($opt_version)){
+   print "Vous devez saisir la version de SNMP\n";
+   exit ($ERRORS{'UNKNOWN'});
+}
+elsif (!defined($opt_host)){
+   print "Vous devez saisir une adresse ip pour le host\n";
+   exit ($ERRORS{'UNKNOWN'});
+}
+elsif (!defined($opt_warning)){
+   print "Vous devez saisir une valeur WARNING pour la temperature du couloir froid\n";
+   exit ($ERRORS{'UNKNOWN'});
+}
+elsif (!defined($opt_critical)){
+   print "Vous devez saisir une valeur CRITICAL pour la temperature du couloir froid\n";
+   exit ($ERRORS{'UNKNOWN'});
+}
+
+##
+## Initialisation connexion SNMP sur un hôte
+my ($session, $error) = Net::SNMP ->session(-community => $opt_community,
+					    -version => $opt_version,
+					    -hostname => $opt_host,
+					    );
+if (!defined($session)){
+  print ("UNKNOWN: $error\n");
+  exit ($ERRORS{'UNKNOWN'});
+}
+
+##
+## Affiche la temperature à l'interieur du couloir froid.
+##
+my $snmp_oid = "1.3.6.1.4.1.476.1.42.3.4.1.3.3.1.50.1";
+
+
+##
+## Permet de faire un get sur une feuille (OID)
+##
+my $resultOID = $session->get_request(-varbindlist => [$snmp_oid]);
+if (!defined($resultOID)) {
+	printf("UNKNOWN: %s.\n", $session->error);
+	$session->close;
+	exit $ERRORS{'UNKNOWN'};
+}
+
+##
+## Récupération de la valeur de OID
+##
+my $result = $resultOID->{$snmp_oid};
+## Il faut divise par 10 pour avoir la temperature du couloir froid (=Supply Air)
+$result = $result / 10;
+## Arrondi le resultat
+$result = sprintf("%.0f", $result );
+
+##
+## Déclaration d'une variable pour récupérer le statut, pour l'afficher dans la sortie. Par défaut OK
+##
+my $status = 'OK';
+
+##
+## Test des conditions pour attribuer le status CRITICAL ou WARNING
+## La valeur CRITICAL a été definie à 26°C. Valeur definie par l'installateur de la Climatisation. 
+##
+if ( $result > $opt_critical ) {
+       $status = 'CRITICAL';
+      }
+	elsif ( $result >= $opt_warning && $result < $opt_critical ){
+           $status = 'WARNING';
+      }
+  
+## Affichage des informations dans Centreon
+printf("$status Temperature Cold Corridor (°C): %d  (Seuils W:$opt_warning C:$opt_critical)|COLD_CORRIDOR=%d, MAXI_COLD_CORRIDOR=$opt_critical\n", $result,$result);
+exit $ERRORS{$status};
